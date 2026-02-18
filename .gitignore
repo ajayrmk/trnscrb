@@ -1,9 +1,17 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 *.egg
+
+# Build / dist
 dist/
 build/
+
+# macOS
 .DS_Store
+
+# Runtime artefacts
 *.wav
 *.log
+/trnscrb/__pycache__/
