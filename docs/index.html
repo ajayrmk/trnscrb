@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>trnscrb — Offline meeting transcription for macOS</title>
+  <meta name="description" content="trnscrb lives in your menu bar, listens for meetings, transcribes them locally with Whisper, and makes every transcript searchable from Claude Desktop." />
+  <meta property="og:title" content="trnscrb" />
+  <meta property="og:description" content="Offline meeting transcription for macOS — no cloud, no subscription." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://trnscrb.com" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f0f0f;
+      --surface:  #1a1a1a;
+      --border:   #2a2a2a;
+      --text:     #e8e8e8;
+      --muted:    #888;
+      --accent:   #dc2626;
+      --code-bg:  #141414;
+      --radius:   10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--text); text-decoration: none; }
+    a:hover { opacity: 0.7; }
+
+    /* ── layout ── */
+    .container { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+    /* ── nav ── */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+    }
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-logo {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .nav-links {
+      display: flex;
+      gap: 24px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); opacity: 1; }
+
+    /* ── hero ── */
+    .hero {
+      padding: 80px 0 64px;
+      text-align: center;
+    }
+    .hero-eyebrow {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      font-size: clamp(36px, 6vw, 56px);
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      margin-bottom: 20px;
+    }
+    .hero p {
+      font-size: 18px;
+      color: var(--muted);
+      max-width: 520px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    /* ── install hero block ── */
+    .install-primary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      text-align: left;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    .install-primary .label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .install-primary pre {
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 14px;
+      color: var(--text);
+      line-height: 1.8;
+      white-space: pre;
+    }
+    .install-primary .comment { color: var(--muted); }
+
+    /* ── section ── */
+    section { padding: 64px 0; border-top: 1px solid var(--border); }
+    section h2 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 24px;
+    }
+    section p { color: var(--muted); line-height: 1.7; margin-bottom: 16px; }
+    section p:last-child { margin-bottom: 0; }
+
+    /* ── how it works ── */
+    .steps {
+      display: grid;
+      gap: 16px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .step-body { padding-top: 5px; }
+    .step-body strong { color: var(--text); }
+    .step-body p { font-size: 14px; margin-bottom: 0; }
+
+    /* ── code block ── */
+    pre, code {
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    }
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 13px;
+      line-height: 1.8;
+      overflow-x: auto;
+      margin: 16px 0;
+    }
+    .code-block .comment { color: var(--muted); }
+    .code-block .cmd { color: var(--text); }
+
+    /* ── table ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      vertical-align: top;
+    }
+    td:first-child {
+      color: var(--text);
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 13px;
+      padding-right: 24px;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── install methods ── */
+    .install-methods { display: grid; gap: 16px; }
+    .method {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+    }
+    .method-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .method-badge {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--border);
+      color: var(--muted);
+    }
+    .method-badge.recommended {
+      background: rgba(220, 38, 38, 0.15);
+      color: var(--accent);
+    }
+    .method h3 { font-size: 16px; font-weight: 600; }
+    .method p { font-size: 14px; margin-top: 4px; margin-bottom: 0; }
+    .method pre {
+      font-size: 13px;
+      line-height: 1.8;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-top: 12px;
+      overflow-x: auto;
+    }
+    .method pre .comment { color: var(--muted); }
+
+    /* ── privacy ── */
+    .privacy-note {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    /* ── footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+    }
+    footer .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+    footer p {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); opacity: 1; }
+
+    /* ── responsive ── */
+    @media (max-width: 600px) {
+      .hero { padding: 48px 0 40px; }
+      .nav-links { gap: 16px; }
+      section { padding: 48px 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- nav -->
+  <nav>
+    <div class="container">
+      <span class="nav-logo">trnscrb</span>
+      <div class="nav-links">
+        <a href="https://github.com/ajayrmk/trnscrb">GitHub</a>
+        <a href="https://github.com/ajayrmk/trnscrb/issues">Issues</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- hero -->
+  <div class="hero">
+    <div class="container">
+      <div class="hero-eyebrow">macOS · Local · Private</div>
+      <h1>Transcribe meetings.<br>No cloud. No subscription.</h1>
+      <p>trnscrb lives in your menu bar, auto-detects meetings, transcribes locally with Whisper, and makes every transcript searchable from Claude Desktop.</p>
+
+      <div class="install-primary">
+        <div class="label">Recommended install</div>
+        <pre><span class="comment"># Install</span>
+<span>brew tap ajayrmk/tap</span>
+<span>brew install trnscrb</span>
+<span>trnscrb install</span>
+
+<span class="comment"># Launch</span>
+<span>trnscrb start</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <!-- how it works -->
+    <section>
+      <h2>How it works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <strong>Meeting detected</strong>
+            <p>Mic active for 5 s + meeting app running — Google Meet, Zoom, Slack Huddle, Teams, FaceTime.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <strong>Recording</strong>
+            <p>Audio captured via mic or BlackHole virtual driver for system + mic combined.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <strong>Transcription</strong>
+            <p>Whisper <code>small</code> model runs entirely on-device using Apple Silicon Metal — no internet required.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <strong>Speaker labels</strong>
+            <p>pyannote.audio assigns SPEAKER_00, SPEAKER_01 etc. Run <code>trnscrb enrich</code> to replace them with inferred names.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-body">
+            <strong>Saved to Claude Desktop</strong>
+            <p>Plain <code>.txt</code> in <code>~/meeting-notes/</code>, instantly searchable from Claude Desktop via MCP.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- install -->
+    <section id="install">
+      <h2>Install</h2>
+      <div class="install-methods">
+
+        <div class="method">
+          <div class="method-header">
+            <div class="method-badge recommended">Recommended</div>
+            <h3>Homebrew</h3>
+          </div>
+          <p>Isolated, managed, easy to update or remove.</p>
+          <pre><span>brew tap ajayrmk/tap</span>
+<span>brew install trnscrb</span>
+<span>trnscrb install</span></pre>
+        </div>
+
+        <div class="method">
+          <div class="method-header">
+            <div class="method-badge">pip</div>
+            <h3>pip / uv</h3>
+          </div>
+          <p>For Python developers who prefer pip or uv.</p>
+          <pre><span class="comment"># pip</span>
+<span>pip install trnscrb &amp;&amp; trnscrb install</span>
+
+<span class="comment"># uv</span>
+<span>uv tool install trnscrb &amp;&amp; trnscrb install</span></pre>
+        </div>
+
+      </div>
+
+      <p style="margin-top:20px; font-size:14px;">
+        <code>trnscrb install</code> handles BlackHole audio driver, HuggingFace token for diarization, Whisper model download (~500 MB, one-time), Claude Desktop MCP config, and launch-at-login.
+      </p>
+    </section>
+
+    <!-- claude desktop -->
+    <section id="claude">
+      <h2>Claude Desktop integration</h2>
+      <p>After <code>trnscrb install</code>, Claude Desktop gains these tools automatically:</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Tool</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>start_recording</td><td>Start capturing audio</td></tr>
+          <tr><td>stop_recording</td><td>Stop and transcribe in the background</td></tr>
+          <tr><td>recording_status</td><td>Check if recording or transcribing</td></tr>
+          <tr><td>get_last_transcript</td><td>Fetch the most recent transcript</td></tr>
+          <tr><td>list_transcripts</td><td>List all saved meetings</td></tr>
+          <tr><td>get_transcript</td><td>Read a specific transcript</td></tr>
+          <tr><td>get_calendar_context</td><td>Current or upcoming calendar event</td></tr>
+          <tr><td>enrich_transcript</td><td>Add summary + action items via Claude API</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- cli -->
+    <section id="cli">
+      <h2>CLI reference</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>trnscrb start</td><td>Launch the menu bar app</td></tr>
+          <tr><td>trnscrb install</td><td>Guided setup / re-check dependencies</td></tr>
+          <tr><td>trnscrb list</td><td>List saved transcripts</td></tr>
+          <tr><td>trnscrb show &lt;id&gt;</td><td>Print a transcript</td></tr>
+          <tr><td>trnscrb enrich &lt;id&gt;</td><td>Add summary + action items (needs ANTHROPIC_API_KEY)</td></tr>
+          <tr><td>trnscrb watch</td><td>Headless auto-transcribe, no menu bar</td></tr>
+          <tr><td>trnscrb mic-status</td><td>Live mic activity monitor — useful for debugging</td></tr>
+          <tr><td>trnscrb devices</td><td>List audio input devices</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- privacy -->
+    <section id="privacy">
+      <h2>Privacy</h2>
+      <div class="privacy-note">
+        Everything runs on your machine. No audio or transcripts leave your device unless you explicitly run <code>trnscrb enrich</code>, which sends transcript text to the Claude API for summarisation.
+      </div>
+    </section>
+
+    <!-- requirements -->
+    <section>
+      <h2>Requirements</h2>
+      <table>
+        <tbody>
+          <tr><td>macOS</td><td>13 Ventura or later</td></tr>
+          <tr><td>Hardware</td><td>Apple Silicon (M1/M2/M3/M4) recommended — Whisper runs on Metal</td></tr>
+          <tr><td>Claude Desktop</td><td>Required for MCP integration</td></tr>
+          <tr><td>HuggingFace token</td><td>Required for speaker diarization (free account)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+  </div>
+
+  <!-- footer -->
+  <footer>
+    <div class="container">
+      <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js"
+        data-name="bmc-button"
+        data-slug="ajayram"
+        data-color="#FFDD00"
+        data-emoji="☕"
+        data-font="Cookie"
+        data-text="Buy me a coffee"
+        data-outline-color="#000000"
+        data-font-color="#000000"
+        data-coffee-color="#ffffff">
+      </script>
+      <p>
+        MIT License ·
+        <a href="https://github.com/ajayrmk/trnscrb">GitHub</a> ·
+        <a href="https://github.com/ajayrmk/trnscrb/issues">Report an issue</a>
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>
