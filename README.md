@@ -9,15 +9,16 @@ trnscrb lives in your menu bar, listens for meetings, transcribes them locally w
 ## Install
 
 ```bash
-pip install trnscrb
+brew tap ajayrmk/tap
+brew install trnscrb
 trnscrb install
 ```
 
-Or with `uv`:
+Or with `pip` / `uv`:
 
 ```bash
-uv tool install trnscrb
-trnscrb install
+pip install trnscrb && trnscrb install
+uv tool install trnscrb && trnscrb install
 ```
 
 `trnscrb install` is a guided setup that handles:
