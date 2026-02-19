@@ -25,35 +25,30 @@ def generate_icons() -> None:
 def _make_mic(path: Path, fill: tuple) -> None:
     from PIL import Image, ImageDraw
 
-    S = 44              # canvas size (retina menu bar = 22 pt @ 2x)
+    S = 44  # canvas size (retina menu bar = 22 pt @ 2x)
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    cx = S // 2
 
-    # ── mic capsule body ──────────────────────────────────────────────────────
-    bw, bh = 14, 22     # body width / height
-    bx = cx - bw // 2
-    by = 4
-    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=bw // 2, fill=fill)
+    # ── waveform bars — mirrors the trnscrb logo icon ─────────────────────────
+    # Logo bar heights (relative): 32, 52, 72, 48, 24  (tallest = 72)
+    # Scale tallest bar to 34px to fill 44px canvas with 5px top/bottom margin
+    scale  = 34 / 72
+    bar_w  = 4
+    gap    = 3
+    total_w = 5 * bar_w + 4 * gap  # = 32px
+    x0     = (S - total_w) // 2    # left edge, centred
+    cy     = S // 2
 
-    # ── stand arc (open bottom semicircle) ────────────────────────────────────
-    ar = 11             # arc radius
-    acy = by + bh - 4   # arc centre y
-    lw = 2
-    d.arc(
-        [cx - ar, acy - ar, cx + ar, acy + ar],
-        start=180, end=0,
-        fill=fill, width=lw,
-    )
+    heights   = [int(h * scale) for h in [32, 52, 72, 48, 24]]
+    opacities = [0.45, 0.72, 1.0, 0.72, 0.45]
 
-    # ── vertical stem ─────────────────────────────────────────────────────────
-    stem_top = acy + ar - 1
-    stem_bot = S - 8
-    d.line([cx, stem_top, cx, stem_bot], fill=fill, width=lw)
-
-    # ── base bar ─────────────────────────────────────────────────────────────
-    bbar = 10
-    d.line([cx - bbar, stem_bot, cx + bbar, stem_bot], fill=fill, width=lw)
+    r, g, b, a = fill
+    for i, (h, op) in enumerate(zip(heights, opacities)):
+        x  = x0 + i * (bar_w + gap)
+        y0 = cy - h // 2
+        y1 = cy + h // 2
+        color = (r, g, b, int(a * op))
+        d.rounded_rectangle([x, y0, x + bar_w, y1], radius=bar_w // 2, fill=color)
 
     img.save(str(path))
 
