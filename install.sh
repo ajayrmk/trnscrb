@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Bootstrap installer for inscry.
+# Bootstrap installer for trnscrb.
 # Run this once:  bash install.sh
 set -e
 
 echo ""
-echo "Installing inscry..."
+echo "Installing trnscrb..."
 echo ""
 
 # Check Python
@@ -35,15 +35,15 @@ if ! command -v uv &>/dev/null; then
 fi
 echo "  uv $(uv --version | cut -d' ' -f2)  ✓"
 
-# Install inscry via uv tool
+# Install trnscrb via uv tool
 if [ -f "pyproject.toml" ]; then
-    echo "  Installing inscry from source..."
+    echo "  Installing trnscrb from source..."
     uv tool install . --force-reinstall 2>/dev/null || uv tool install .
 else
-    echo "  Installing inscry from PyPI..."
-    uv tool install inscry
+    echo "  Installing trnscrb from PyPI..."
+    uv tool install trnscrb
 fi
-echo "  inscry installed  ✓"
+echo "  trnscrb installed  ✓"
 
 # Ensure uv tool bin dir is on PATH for this session
 export PATH="$HOME/.local/bin:$PATH"
@@ -51,4 +51,4 @@ export PATH="$HOME/.local/bin:$PATH"
 echo ""
 
 # Run the smart interactive installer
-inscry install
+trnscrb install
