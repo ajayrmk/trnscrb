@@ -87,6 +87,37 @@ trnscrb watch               # headless auto-transcribe, no menu bar
 
 ---
 
+## Anthropic API key
+
+The `enrich` command and MCP `enrich_transcript` tool require an Anthropic API key. Add it to your shell profile:
+
+```bash
+# ~/.zshrc
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Then restart your terminal or run `source ~/.zshrc`. If trnscrb is already running, restart it with `./restart.sh`.
+
+---
+
+## Restarting
+
+After code changes or environment variable updates (e.g. adding `ANTHROPIC_API_KEY` to `.zshrc`), restart trnscrb:
+
+```bash
+./restart.sh
+```
+
+Or manually:
+
+```bash
+pkill -f "trnscrb"
+source ~/.zshrc
+trnscrb start
+```
+
+---
+
 ## System audio with BlackHole
 
 To capture both your mic and the other participants' audio:
