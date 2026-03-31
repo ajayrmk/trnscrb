@@ -1,13 +1,12 @@
 """Python wrapper for the sck-capture Swift helper.
 
-Manages the subprocess lifecycle and collects raw float32 PCM frames
-in the same format as sounddevice callbacks.
+Manages the subprocess lifecycle and streams raw float32 PCM to a temp
+file on disk (constant memory regardless of recording duration).
 """
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
-
-import numpy as np
 
 # Default binary location (built by trnscrb install)
 _BINARY_NAME = "sck-capture"
@@ -38,18 +37,20 @@ class SCKCapture:
     def __init__(self, bundle_id: str):
         self._bundle_id = bundle_id
         self._process: subprocess.Popen | None = None
-        self._frames: list[np.ndarray] = []
-        self._lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
+        self._file = None
 
     def start(self) -> None:
         binary = find_binary()
         if binary is None:
             raise RuntimeError(
-                "sck-capture binary not found. Run: cd swift/sck-capture && swift build"
+                "sck-capture binary not found. Run: trnscrb install"
             )
 
-        self._frames = []
+        self._file = tempfile.NamedTemporaryFile(
+            suffix=".pcm", delete=False, prefix="trnscrb_sck_"
+        )
+
         self._process = subprocess.Popen(
             [str(binary), self._bundle_id],
             stdout=subprocess.PIPE,
@@ -65,18 +66,22 @@ class SCKCapture:
                 break
             if line.startswith("ERROR") or line.startswith("FATAL"):
                 self._process.terminate()
+                self._file.close()
+                Path(self._file.name).unlink(missing_ok=True)
                 raise RuntimeError(f"sck-capture failed: {line}")
 
         if not ready:
             self._process.terminate()
+            self._file.close()
+            Path(self._file.name).unlink(missing_ok=True)
             raise RuntimeError("sck-capture did not become ready in time")
 
         # Start reader thread
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
 
-    def stop(self) -> list[np.ndarray]:
-        """Stop capture and return collected frames."""
+    def stop(self) -> Path | None:
+        """Stop capture and return path to temp PCM file."""
         if self._process and self._process.poll() is None:
             self._process.terminate()
             self._process.wait(timeout=3)
@@ -84,17 +89,18 @@ class SCKCapture:
         if self._reader_thread:
             self._reader_thread.join(timeout=2)
 
-        with self._lock:
-            frames = list(self._frames)
-        return frames
+        if self._file:
+            path = Path(self._file.name)
+            self._file.close()
+            self._file = None
+            return path
+        return None
 
     def _read_loop(self) -> None:
-        """Read PCM chunks from subprocess stdout."""
+        """Read PCM chunks from subprocess stdout and write to temp file."""
         stdout = self._process.stdout
         while True:
             data = stdout.read(CHUNK_BYTES)
             if not data:
                 break
-            arr = np.frombuffer(data, dtype=np.float32)
-            with self._lock:
-                self._frames.append(arr)
+            self._file.write(data)
