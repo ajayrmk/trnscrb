@@ -114,18 +114,17 @@ class TrnscrbApp(rumps.App):
 
     # ── shared start / stop ───────────────────────────────────────────────────
 
-    def _do_start(self, meeting_name: str = ""):
+    def _do_start(self, meeting_name: str = "", bundle_id: str | None = None):
         if not meeting_name:
             evt = get_current_or_upcoming_event()
             meeting_name = evt["title"] if evt else ""
 
-        device = rec_module.Recorder.find_blackhole_device()
-        self._recorder   = rec_module.Recorder(device=device)
+        self._recorder   = rec_module.Recorder(app_bundle_id=bundle_id)
         self._started_at = datetime.now()
         self._recorder.start()
         self._set_state("recording")
 
-        source = "BlackHole (system + mic)" if device is not None else "built-in mic"
+        source = self._recorder.audio_source_description
         label  = f" — {meeting_name}" if meeting_name else ""
         rumps.notification("Trnscrb", f"Transcription started{label}", f"via {source}")
 
@@ -141,10 +140,10 @@ class TrnscrbApp(rumps.App):
 
     # ── auto-record callbacks ─────────────────────────────────────────────────
 
-    def _auto_start(self, meeting_name: str):
+    def _auto_start(self, meeting_name: str, bundle_id: str | None = None):
         if getattr(self, "_current_state", "idle") in ("recording", "transcribing"):
             return
-        self._do_start(meeting_name=meeting_name)
+        self._do_start(meeting_name=meeting_name, bundle_id=bundle_id)
 
     def _auto_stop(self):
         if self._recorder and self._recorder.is_recording:

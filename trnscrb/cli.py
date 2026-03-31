@@ -205,10 +205,9 @@ def watch():
     _recorder_ref: list = [None]
     _started_ref:  list = [None]
 
-    def on_start(meeting_name: str):
+    def on_start(meeting_name: str, bundle_id: str | None = None):
         click.echo(f"  🔴 Meeting detected: {meeting_name} — recording started")
-        device = rec_module.Recorder.find_blackhole_device()
-        r = rec_module.Recorder(device=device)
+        r = rec_module.Recorder(app_bundle_id=bundle_id)
         r.start()
         _recorder_ref[0] = r
         _started_ref[0]  = datetime.now()
