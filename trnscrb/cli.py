@@ -264,6 +264,22 @@ def watch():
         storage.save_transcript(path, text)
         click.echo(f"  ✓ Saved: {path.name}")
 
+        from trnscrb.settings import get as get_setting
+        if get_setting("auto_enrich"):
+            try:
+                from trnscrb.enricher import enrich_transcript
+                from trnscrb.calendar_integration import get_current_or_upcoming_event
+                result = enrich_transcript(text, calendar_event=get_current_or_upcoming_event())
+                updated = (
+                    result["enriched_transcript"]
+                    + "\n\n" + "=" * 60 + "\n\n"
+                    + result["enrichment"]
+                )
+                storage.save_transcript(path, updated)
+                click.echo(f"  ✓ Enriched: {path.name}")
+            except Exception as e:
+                click.echo(f"  ⚠ Enrichment failed: {e}")
+
     watcher = MicWatcher(on_start=on_start, on_stop=on_stop)
     watcher.start()
 

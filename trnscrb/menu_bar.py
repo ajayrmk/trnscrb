@@ -188,6 +188,20 @@ class TrnscrbApp(rumps.App):
         self._restore_idle()
         rumps.notification("Trnscrb", f"Saved: {meeting_name}", f"~/meeting-notes/{path.name}")
 
+        if get_setting("auto_enrich"):
+            try:
+                from trnscrb.enricher import enrich_transcript
+                result = enrich_transcript(text, calendar_event=evt)
+                updated = (
+                    result["enriched_transcript"]
+                    + "\n\n" + "=" * 60 + "\n\n"
+                    + result["enrichment"]
+                )
+                storage.save_transcript(path, updated)
+                rumps.notification("Trnscrb", "Enrichment complete", path.name)
+            except Exception as e:
+                rumps.notification("Trnscrb", "Enrichment failed", str(e))
+
     def _restore_idle(self):
         """Called from background thread when transcription finishes."""
         state = "watching" if (self._watcher and self._watcher.is_watching) else "idle"
