@@ -141,8 +141,10 @@ class TrnscrbApp(rumps.App):
     # ── auto-record callbacks ─────────────────────────────────────────────────
 
     def _auto_start(self, meeting_name: str, bundle_id: str | None = None):
-        if getattr(self, "_current_state", "idle") in ("recording", "transcribing"):
+        if getattr(self, "_current_state", "idle") == "recording":
             return
+        # Allow starting a new recording while previous is still transcribing
+        # (transcription runs in a background thread, doesn't need the recorder)
         self._do_start(meeting_name=meeting_name, bundle_id=bundle_id)
 
     def _auto_stop(self):
