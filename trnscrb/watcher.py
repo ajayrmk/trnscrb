@@ -145,12 +145,16 @@ class MicWatcher:
                     self._state = "idle"
                     self._since = None
                 elif elapsed >= WARMUP_SECS:
+                    meeting_name, bundle_id = detect_meeting()
+                    if not is_meeting_app_running() and bundle_id is None:
+                        # Mic is active but no meeting app found — stay warming
+                        # and recheck next poll (avoids recording YouTube, Spotify, etc.)
+                        continue
                     self._rec_started  = now
                     self._state        = "recording"
                     self._since        = now
                     self._no_app_polls = 0
                     _app_counter       = APP_POLL_EVERY  # check app on first recording poll
-                    meeting_name, bundle_id = detect_meeting()
                     self.on_start(meeting_name, bundle_id)
 
             elif self._state == "recording":
