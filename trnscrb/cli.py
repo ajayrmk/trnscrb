@@ -50,14 +50,24 @@ def install(force: bool):
 
     click.echo()
 
-    # 2. BlackHole audio driver
-    bh_ok = _blackhole_installed()
-    _row("BlackHole 2ch", bh_ok, "audio driver")
-    if not bh_ok:
-        if click.confirm("  Install BlackHole via Homebrew?", default=True):
-            _run(["brew", "install", "blackhole-2ch"])
-            click.echo("  After install: open System Settings → Sound → Output and select")
-            click.echo("  'Multi-Output Device' that includes BlackHole to capture system audio.")
+    # 2. Xcode CLI tools + SCK audio capture helper
+    xcode_ok = _xcode_cli_installed()
+    _row("Xcode CLI Tools", xcode_ok, "needed to build audio capture helper")
+    if not xcode_ok:
+        click.echo("  Run: xcode-select --install")
+        if click.confirm("  Install now?", default=True):
+            _run(["xcode-select", "--install"])
+            click.echo("  Complete the install dialog, then re-run: trnscrb install")
+            sys.exit(0)
+
+    sck_ok = _sck_binary_built()
+    _row("SCK audio helper", sck_ok, "ScreenCaptureKit capture binary")
+    if not sck_ok:
+        click.echo("  Building audio capture helper…")
+        if _build_sck_helper():
+            click.echo(click.style("  Audio capture helper built.", fg="green"))
+        else:
+            click.echo(click.style("  Build failed. Check Xcode CLI tools.", fg="red"))
 
     click.echo()
 
@@ -135,13 +145,15 @@ def install(force: bool):
 
     click.echo()
 
-    # 8. Permissions (mic + calendar) — only 2, only what's needed
+    # 8. Permissions (mic + calendar + screen recording)
     click.echo("  Permissions (macOS will prompt if not yet granted):")
     click.echo()
-    click.echo("  🎙  Microphone — required to record audio")
+    click.echo("  🎙  Microphone        — required to record audio")
     _request_mic_permission()
-    click.echo("  📅  Calendar   — optional, used to auto-name meetings from your events")
+    click.echo("  📅  Calendar          — optional, used to auto-name meetings from your events")
     _request_calendar_permission()
+    click.echo("  🖥  Screen Recording  — required for ScreenCaptureKit audio capture")
+    _request_screen_recording_permission()
 
     click.echo()
 
@@ -205,10 +217,9 @@ def watch():
     _recorder_ref: list = [None]
     _started_ref:  list = [None]
 
-    def on_start(meeting_name: str):
+    def on_start(meeting_name: str, bundle_id: str | None = None):
         click.echo(f"  🔴 Meeting detected: {meeting_name} — recording started")
-        device = rec_module.Recorder.find_blackhole_device()
-        r = rec_module.Recorder(device=device)
+        r = rec_module.Recorder(app_bundle_id=bundle_id)
         r.start()
         _recorder_ref[0] = r
         _started_ref[0]  = datetime.now()
@@ -252,6 +263,22 @@ def watch():
         path = storage.get_transcript_path(meeting_name, started_at)
         storage.save_transcript(path, text)
         click.echo(f"  ✓ Saved: {path.name}")
+
+        from trnscrb.settings import get as get_setting
+        if get_setting("auto_enrich"):
+            try:
+                from trnscrb.enricher import enrich_transcript
+                from trnscrb.calendar_integration import get_current_or_upcoming_event
+                result = enrich_transcript(text, calendar_event=get_current_or_upcoming_event())
+                updated = (
+                    result["enriched_transcript"]
+                    + "\n\n" + "=" * 60 + "\n\n"
+                    + result["enrichment"]
+                )
+                storage.save_transcript(path, updated)
+                click.echo(f"  ✓ Enriched: {path.name}")
+            except Exception as e:
+                click.echo(f"  ⚠ Enrichment failed: {e}")
 
     watcher = MicWatcher(on_start=on_start, on_stop=on_stop)
     watcher.start()
@@ -351,7 +378,9 @@ def mic_status():
     click.echo(f"\n  Microphone: {status}")
 
     if active:
-        click.echo(f"  Detected app: {detect_meeting()}")
+        name, bundle_id = detect_meeting()
+        bundle_str = f" ({bundle_id})" if bundle_id else ""
+        click.echo(f"  Detected app: {name}{bundle_str}")
     click.echo(f"\n  Watcher thresholds: warmup={WARMUP_SECS}s  grace={GRACE_SECS}s  min_save={30}s")
     click.echo()
     click.echo("  Watching for 10 seconds (press Ctrl-C to stop early)…")
@@ -366,14 +395,15 @@ def mic_status():
 @cli.command()
 def devices():
     """List available audio input devices."""
-    from trnscrb.recorder import Recorder
-    devs = Recorder.list_input_devices()
-    if not devs:
+    import sounddevice as sd
+    devs = sd.query_devices()
+    found = False
+    for i, d in enumerate(devs):
+        if d["max_input_channels"] > 0:
+            found = True
+            click.echo(f"  [{i}] {d['name']}  {d['max_input_channels']}ch")
+    if not found:
         click.echo("No input devices found.")
-        return
-    for d in devs:
-        tag = "  (BlackHole)" if "BlackHole" in d["name"] else ""
-        click.echo(f"  [{d['index']}] {d['name']}  {d['channels']}ch{tag}")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -389,14 +419,58 @@ def _pkg_installed(import_name: str) -> bool:
     return importlib.util.find_spec(import_name.split(".")[0]) is not None
 
 
-def _blackhole_installed() -> bool:
+def _xcode_cli_installed() -> bool:
+    """Check if Xcode Command Line Tools are installed."""
     try:
         result = subprocess.run(
-            ["system_profiler", "SPAudioDataType"],
-            capture_output=True, text=True, timeout=10,
+            ["xcode-select", "-p"],
+            capture_output=True, text=True, timeout=5,
         )
-        return "BlackHole" in result.stdout
+        return result.returncode == 0
     except Exception:
+        return False
+
+
+def _sck_binary_built() -> bool:
+    """Check if the sck-capture binary exists."""
+    from trnscrb.sck import find_binary
+    return find_binary() is not None
+
+
+def _build_sck_helper() -> bool:
+    """Build the sck-capture Swift helper and install to ~/.local/share/trnscrb/."""
+    # Bundled inside the Python package (works for pip/uv installs)
+    swift_dir = Path(__file__).resolve().parent / "sck-capture"
+    if not swift_dir.exists():
+        # Fallback: repo root (development checkout)
+        swift_dir = Path(__file__).resolve().parent.parent / "swift" / "sck-capture"
+    if not swift_dir.exists():
+        click.echo(click.style(f"  Swift source not found at {swift_dir}", fg="red"))
+        return False
+    try:
+        result = subprocess.run(
+            ["swift", "build", "-c", "release"],
+            cwd=str(swift_dir),
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            click.echo(result.stderr[-500:] if result.stderr else "Unknown error")
+            return False
+
+        # Copy binary to install location
+        built = swift_dir / ".build" / "release" / "sck-capture"
+        if not built.exists():
+            return False
+
+        install_dir = Path.home() / ".local" / "share" / "trnscrb"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        dest = install_dir / "sck-capture"
+        import shutil
+        shutil.copy2(str(built), str(dest))
+        dest.chmod(0o755)
+        return True
+    except Exception as e:
+        click.echo(click.style(f"  Build error: {e}", fg="red"))
         return False
 
 
@@ -492,6 +566,23 @@ def _request_calendar_permission() -> None:
         click.echo(click.style("    ✓ Calendar access granted (or skipped)", fg="green"))
     except Exception as e:
         click.echo(click.style(f"    ⚠  Calendar: {e}", fg="yellow"))
+
+
+def _request_screen_recording_permission() -> None:
+    """Check Screen Recording permission (required for ScreenCaptureKit)."""
+    try:
+        from trnscrb.screen_capture import check_permission, request_permission
+        if check_permission():
+            click.echo(click.style("    ✓ Screen Recording access granted", fg="green"))
+        else:
+            request_permission()
+            click.echo(click.style(
+                "    ⚠  Screen Recording: grant access in System Settings → "
+                "Privacy & Security → Screen Recording",
+                fg="yellow",
+            ))
+    except Exception as e:
+        click.echo(click.style(f"    ⚠  Screen Recording: {e}", fg="yellow"))
 
 
 # ── login item helpers ────────────────────────────────────────────────────────
