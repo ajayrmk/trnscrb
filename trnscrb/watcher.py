@@ -435,9 +435,29 @@ return ""
 """
 
 
+_FIREFOX_WINDOW_SCRIPT = """
+tell application "System Events"
+    if not (exists process "firefox") then return ""
+end tell
+tell application "Firefox"
+    repeat with w in windows
+        set t to name of w
+        -- Active Meet call: "Meet – abc-defg-hij"; landing page: "Google Meet"
+        -- Only match the "Meet – " pattern (with en-dash), not the bare "Google Meet" title
+        if t starts with "Meet " then
+            if t does not contain "ended" then return "Google Meet"
+        end if
+        if t contains "Microsoft Teams" then return "Microsoft Teams"
+        if t contains "Zoom Meeting" then return "Zoom"
+    end repeat
+end tell
+return ""
+"""
+
 _BROWSER_SCRIPTS = [
     (_CHROME_TAB_SCRIPT,  "com.google.Chrome"),
     (_SAFARI_TAB_SCRIPT,  "com.apple.Safari"),
+    (_FIREFOX_WINDOW_SCRIPT, "org.mozilla.firefox"),
 ]
 
 
