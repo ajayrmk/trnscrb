@@ -24,6 +24,28 @@ _CLAUDE_CONFIG = (
 )
 
 
+def _integrate_notes(transcript_path: Path) -> None:
+    """Fire-and-forget: ask Claude Code to integrate the transcript into notes."""
+    import shutil
+
+    claude = shutil.which("claude")
+    if not claude:
+        return
+    try:
+        subprocess.Popen(
+            [
+                claude, "-p",
+                f"/organize-notes Read the meeting transcript at {transcript_path} "
+                f"and integrate the key information into the notes.",
+                "--allowedTools", "Read,Write,Edit,Glob,Grep",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 # ── CLI group ─────────────────────────────────────────────────────────────────
 
 @click.group()
@@ -279,6 +301,8 @@ def watch():
                 click.echo(f"  ✓ Enriched: {path.name}")
             except Exception as e:
                 click.echo(f"  ⚠ Enrichment failed: {e}")
+
+        _integrate_notes(path)
 
     watcher = MicWatcher(on_start=on_start, on_stop=on_stop)
     watcher.start()

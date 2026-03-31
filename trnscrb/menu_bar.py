@@ -202,6 +202,8 @@ class TrnscrbApp(rumps.App):
             except Exception as e:
                 rumps.notification("Trnscrb", "Enrichment failed", str(e))
 
+        _integrate_notes(path)
+
     def _restore_idle(self):
         """Called from background thread when transcription finishes."""
         state = "watching" if (self._watcher and self._watcher.is_watching) else "idle"
@@ -234,6 +236,28 @@ class TrnscrbApp(rumps.App):
             self.icon, self.title = (rec_icon, None) if rec_icon else (None, _EMOJI_RECORDING)
         else:
             self.icon, self.title = (idle_icon, None) if idle_icon else (None, _EMOJI_IDLE)
+
+
+def _integrate_notes(transcript_path: Path) -> None:
+    """Fire-and-forget: ask Claude Code to integrate the transcript into notes."""
+    import shutil
+
+    claude = shutil.which("claude")
+    if not claude:
+        return
+    try:
+        subprocess.Popen(
+            [
+                claude, "-p",
+                f"/organize-notes Read the meeting transcript at {transcript_path} "
+                f"and integrate the key information into the notes.",
+                "--allowedTools", "Read,Write,Edit,Glob,Grep",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 def _read_hf_token() -> str | None:
