@@ -352,8 +352,8 @@ def is_meeting_app_running() -> bool:
     except Exception:
         pass
 
-    # 3. Browser tab URL + title check
-    return _browser_has_meeting_tab()
+    # 3. Browser tab URL check (narrow — excludes Firefox window titles)
+    return _browser_has_meeting_tab(narrow=True)
 
 
 def detect_meeting() -> tuple[str, str | None]:
@@ -454,20 +454,30 @@ end tell
 return ""
 """
 
+# All browsers — used by detect_meeting() at START (broad is fine)
 _BROWSER_SCRIPTS = [
     (_CHROME_TAB_SCRIPT,  "com.google.Chrome"),
     (_SAFARI_TAB_SCRIPT,  "com.apple.Safari"),
     (_FIREFOX_WINDOW_SCRIPT, "org.mozilla.firefox"),
 ]
 
+# URL-based browsers only — used by is_meeting_app_running() for STOP detection.
+# Firefox is excluded: window titles don't change reliably after leaving a call,
+# which prevents auto-stop. Firefox meetings stop via mic-idle detection instead.
+_BROWSER_SCRIPTS_NARROW = [
+    (_CHROME_TAB_SCRIPT,  "com.google.Chrome"),
+    (_SAFARI_TAB_SCRIPT,  "com.apple.Safari"),
+]
 
-def _browser_has_meeting_tab(return_name: bool = False):
+
+def _browser_has_meeting_tab(return_name: bool = False, narrow: bool = False):
     """
-    Check Chrome and Safari for open meeting tabs.
+    Check browsers for open meeting tabs.
     return_name=False → returns bool (fast presence check)
     return_name=True  → returns (meeting_name, browser_bundle_id) or None
     """
-    for script, browser_bundle in _BROWSER_SCRIPTS:
+    scripts = _BROWSER_SCRIPTS_NARROW if narrow else _BROWSER_SCRIPTS
+    for script, browser_bundle in scripts:
         try:
             r = subprocess.run(
                 ["osascript", "-e", script],
