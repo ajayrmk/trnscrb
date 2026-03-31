@@ -94,6 +94,16 @@ class Recorder:
                 mic_audio = np.pad(mic_audio, (0, max_len - len(mic_audio)))
             if len(sck_audio) < max_len:
                 sck_audio = np.pad(sck_audio, (0, max_len - len(sck_audio)))
+
+            # Normalize both streams to similar RMS so Whisper hears both voices
+            mic_rms = np.sqrt(np.mean(mic_audio**2))
+            sck_rms = np.sqrt(np.mean(sck_audio**2))
+            if mic_rms > 1e-6 and sck_rms > 1e-6:
+                gain = sck_rms / mic_rms
+                # Cap gain to avoid amplifying background noise
+                gain = min(gain, 5.0)
+                mic_audio = mic_audio * gain
+
             audio = np.clip(mic_audio + sck_audio, -1.0, 1.0)
         elif len(sck_audio) > 0:
             audio = sck_audio
