@@ -6,11 +6,14 @@ States:
   recording   — red icon, Start disabled, Stop enabled
   transcribing— red icon, Start disabled, Stop shows "Transcribing…" (disabled)
 """
+import logging
 import os
 import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger("trnscrb")
 
 import rumps
 
@@ -43,13 +46,15 @@ class TrnscrbApp(rumps.App):
         # Keep direct references so we can retitle without re-lookup
         self._start_item = rumps.MenuItem("Start Transcribing", callback=self.start_recording)
         self._stop_item  = rumps.MenuItem("Stop Transcribing",  callback=None)
-        self._auto_item  = rumps.MenuItem("Auto-transcribe: Off", callback=self.toggle_auto_record)
+        self._auto_item   = rumps.MenuItem("Auto-transcribe: Off", callback=self.toggle_auto_record)
+        self._enrich_item = rumps.MenuItem("Auto-enrich: Off", callback=self.toggle_auto_enrich)
 
         self.menu = [
             self._start_item,
             self._stop_item,
             None,
             self._auto_item,
+            self._enrich_item,
             None,
             rumps.MenuItem("Open Notes Folder", callback=self.open_folder),
             None,
@@ -65,6 +70,9 @@ class TrnscrbApp(rumps.App):
         if get_setting("auto_record"):
             self._start_watcher()
             self._auto_item.title = "Auto-transcribe: On ✓"
+
+        if get_setting("auto_enrich"):
+            self._enrich_item.title = "Auto-enrich: On ✓"
 
     # ── watcher ───────────────────────────────────────────────────────────────
 
@@ -101,6 +109,17 @@ class TrnscrbApp(rumps.App):
             put_setting("auto_record", True)
             rumps.notification("Trnscrb", "Auto-transcribe on",
                                "Will start when mic is active for 5+ seconds")
+
+    def toggle_auto_enrich(self, sender):
+        if get_setting("auto_enrich"):
+            sender.title = "Auto-enrich: Off"
+            put_setting("auto_enrich", False)
+            rumps.notification("Trnscrb", "Auto-enrich off", "")
+        else:
+            sender.title = "Auto-enrich: On ✓"
+            put_setting("auto_enrich", True)
+            rumps.notification("Trnscrb", "Auto-enrich on",
+                               "Transcripts will be enriched with summary and action items")
 
     def open_folder(self, _):
         subprocess.run(["open", str(storage.ensure_notes_dir())])
@@ -156,16 +175,20 @@ class TrnscrbApp(rumps.App):
     def _process(self, recorder: rec_module.Recorder, started_at: datetime):
         audio_path = recorder.stop()
         if not audio_path:
+            log.warning("No audio captured")
             self._restore_idle()
             rumps.notification("Trnscrb", "Error", "No audio captured.")
             return
 
         evt          = get_current_or_upcoming_event()
         meeting_name = evt["title"] if evt else f"meeting-{started_at.strftime('%H%M')}"
+        log.info("Processing recording: %s (%s)", meeting_name, audio_path)
 
         try:
             segments = transcriber.transcribe(audio_path)
+            log.info("Transcription complete: %d segments", len(segments))
         except Exception as e:
+            log.error("Transcription failed: %s", e, exc_info=True)
             audio_path.unlink(missing_ok=True)
             self._restore_idle()
             rumps.notification("Trnscrb", "Transcription failed", str(e))
@@ -176,19 +199,22 @@ class TrnscrbApp(rumps.App):
             try:
                 diar     = diarizer.diarize(audio_path, hf_token)
                 segments = diarizer.merge(segments, diar)
-            except Exception:
-                pass
+                log.info("Diarization complete")
+            except Exception as e:
+                log.warning("Diarization failed: %s", e, exc_info=True)
 
         audio_path.unlink(missing_ok=True)
 
         text = storage.format_transcript(segments, started_at, meeting_name)
         path = storage.get_transcript_path(meeting_name, started_at)
         storage.save_transcript(path, text)
+        log.info("Transcript saved: %s", path)
 
         self._restore_idle()
         rumps.notification("Trnscrb", f"Saved: {meeting_name}", f"~/meeting-notes/{path.name}")
 
         if get_setting("auto_enrich"):
+            log.info("Starting enrichment for %s", path.name)
             try:
                 from trnscrb.enricher import enrich_transcript
                 result = enrich_transcript(text, calendar_event=evt)
@@ -198,8 +224,10 @@ class TrnscrbApp(rumps.App):
                     + result["enrichment"]
                 )
                 storage.save_transcript(path, updated)
+                log.info("Enrichment complete: %s", path.name)
                 rumps.notification("Trnscrb", "Enrichment complete", path.name)
             except Exception as e:
+                log.error("Enrichment failed: %s", e, exc_info=True)
                 rumps.notification("Trnscrb", "Enrichment failed", str(e))
 
         _integrate_notes(path)
@@ -238,13 +266,30 @@ class TrnscrbApp(rumps.App):
             self.icon, self.title = (idle_icon, None) if idle_icon else (None, _EMOJI_IDLE)
 
 
-def _integrate_notes(transcript_path: Path) -> None:
-    """Fire-and-forget: ask Claude Code to integrate the transcript into notes."""
+def _find_claude_cli() -> str | None:
+    """Find the claude CLI binary, checking common locations if not on PATH."""
     import shutil
 
     claude = shutil.which("claude")
+    if claude:
+        return claude
+    for candidate in (
+        Path.home() / ".local" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+        Path("/opt/homebrew/bin/claude"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _integrate_notes(transcript_path: Path) -> None:
+    """Fire-and-forget: ask Claude Code to integrate the transcript into notes."""
+    claude = _find_claude_cli()
     if not claude:
+        log.warning("Claude CLI not found in PATH or common locations, skipping note integration")
         return
+    log.info("Starting note integration via Claude CLI for %s", transcript_path.name)
     try:
         subprocess.Popen(
             [
@@ -256,8 +301,8 @@ def _integrate_notes(transcript_path: Path) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("Failed to launch Claude CLI for note integration: %s", e)
 
 
 def _read_hf_token() -> str | None:
@@ -271,6 +316,11 @@ def _read_hf_token() -> str | None:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     import AppKit
     app = TrnscrbApp()
     AppKit.NSApplication.sharedApplication().setActivationPolicy_(
