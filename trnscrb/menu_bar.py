@@ -47,7 +47,8 @@ class TrnscrbApp(rumps.App):
         self._start_item = rumps.MenuItem("Start Transcribing", callback=self.start_recording)
         self._stop_item  = rumps.MenuItem("Stop Transcribing",  callback=None)
         self._auto_item   = rumps.MenuItem("Auto-transcribe: Off", callback=self.toggle_auto_record)
-        self._enrich_item = rumps.MenuItem("Auto-enrich: Off", callback=self.toggle_auto_enrich)
+        self._enrich_item    = rumps.MenuItem("Auto-enrich: Off", callback=self.toggle_auto_enrich)
+        self._integrate_item = rumps.MenuItem("Auto-integrate notes: Off", callback=self.toggle_auto_integrate)
 
         self.menu = [
             self._start_item,
@@ -55,6 +56,7 @@ class TrnscrbApp(rumps.App):
             None,
             self._auto_item,
             self._enrich_item,
+            self._integrate_item,
             None,
             rumps.MenuItem("Open Notes Folder", callback=self.open_folder),
             None,
@@ -73,6 +75,9 @@ class TrnscrbApp(rumps.App):
 
         if get_setting("auto_enrich"):
             self._enrich_item.title = "Auto-enrich: On ✓"
+
+        if get_setting("auto_integrate"):
+            self._integrate_item.title = "Auto-integrate notes: On ✓"
 
     # ── watcher ───────────────────────────────────────────────────────────────
 
@@ -120,6 +125,17 @@ class TrnscrbApp(rumps.App):
             put_setting("auto_enrich", True)
             rumps.notification("Trnscrb", "Auto-enrich on",
                                "Transcripts will be enriched with summary and action items")
+
+    def toggle_auto_integrate(self, sender):
+        if get_setting("auto_integrate"):
+            sender.title = "Auto-integrate notes: Off"
+            put_setting("auto_integrate", False)
+            rumps.notification("Trnscrb", "Auto-integrate off", "")
+        else:
+            sender.title = "Auto-integrate notes: On ✓"
+            put_setting("auto_integrate", True)
+            rumps.notification("Trnscrb", "Auto-integrate on",
+                               "Transcripts will be integrated into notes via Claude Code")
 
     def open_folder(self, _):
         subprocess.run(["open", str(storage.ensure_notes_dir())])
@@ -245,7 +261,8 @@ class TrnscrbApp(rumps.App):
                 log.error("Enrichment failed: %s", e, exc_info=True)
                 rumps.notification("Trnscrb", "Enrichment failed", str(e))
 
-        _integrate_notes(path)
+        if get_setting("auto_integrate"):
+            _integrate_notes(path)
 
     def _restore_idle(self):
         """Called from background thread when transcription finishes."""

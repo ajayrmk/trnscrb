@@ -321,7 +321,9 @@ def watch():
             except Exception as e:
                 click.echo(f"  ⚠ Enrichment failed: {e}")
 
-        _integrate_notes(path)
+        from trnscrb.settings import get as get_setting
+        if get_setting("auto_integrate"):
+            _integrate_notes(path)
 
     watcher = MicWatcher(on_start=on_start, on_stop=on_stop)
     watcher.start()

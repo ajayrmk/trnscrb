@@ -8,6 +8,7 @@ _DEFAULTS: dict = {
     "auto_record": True,    # start watching for mic activity on launch
     "model_size": "small",  # whisper model
     "auto_enrich": False,   # enrich transcripts with Claude after saving
+    "auto_integrate": True,  # integrate transcripts into notes via Claude Code
 }
 
 
