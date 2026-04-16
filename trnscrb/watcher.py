@@ -4,11 +4,12 @@ Two rules:
 
 * START — the mic has been continuously held by a known meeting source for
   WARMUP_SECS. A *source* is either a native meeting app (Zoom, FaceTime,
-  Slack, …) identified by the executable path of the mic-holding PID, or a
-  browser whose tab URL / window title points to a recognised meeting
-  service (Google Meet, Microsoft Teams, Zoom-in-browser, Huddle).
+  Slack, …) or a recognised browser (Chrome, Safari, Firefox), identified
+  by the executable path of the mic-holding PID.  Browser tab/title checks
+  are best-effort for naming only — mic hold is sufficient to start.
 * STOP  — no *external* process has been using the mic for GRACE_SECS, OR
-  (for browser meetings only) the meeting tab has disappeared.
+  (for browser meetings where the tab was verified) the meeting tab has
+  disappeared.
 
 Both rules rely on the per-process CoreAudio API (macOS 14+, the same data
 source that drives the orange privacy indicator): we can see which PIDs are
@@ -93,6 +94,11 @@ _BROWSER_BUNDLES: list[str] = [
     "Safari.app/",
     "Firefox.app/",
 ]
+_BROWSER_BUNDLE_IDS: list[str] = [
+    "com.google.Chrome",
+    "com.apple.Safari",
+    "org.mozilla.firefox",
+]
 
 
 # ── CoreAudio constants ───────────────────────────────────────────────────────
@@ -104,9 +110,9 @@ _kIsRunningSomewhere = 0x676F6E65   # 'gone' (kAudioDevicePropertyDeviceIsRunnin
 
 # Per-process CoreAudio API (macOS 14+) — the same data source that drives
 # the orange privacy-indicator dot in the menu bar.
-_kProcessObjectList  = 0x706C7374   # 'plst'
-_kProcessPID         = 0x70706964   # 'ppid'
-_kProcessIsRunningIn = 0x70697220   # 'pir '
+_kProcessObjectList  = 0x70727323   # 'prs#'  kAudioHardwarePropertyProcessObjectList
+_kProcessPID         = 0x70706964   # 'ppid'  kAudioProcessPropertyPID
+_kProcessIsRunningIn = 0x70697269   # 'piri'  kAudioProcessPropertyIsRunningInput
 
 
 class _PropAddr(ctypes.Structure):
@@ -188,6 +194,7 @@ class MicWatcher:
                         source, name, bundle_id = meeting
                         log.info("meeting detected: %s (%s)", name, source)
                         self._rec_started    = now
+                        # Only use tab-gone detection when tab was verified
                         self._browser_source = (source == "browser")
                         self._browser_tick   = 0
                         self._set_state("recording", now)
@@ -195,13 +202,22 @@ class MicWatcher:
                     # else: stay in warming — no recognised meeting yet.
 
             elif self._state == "recording":
-                if not active:
+                if not active and not is_mic_in_use():
+                    # Both per-process AND device-level confirm mic idle.
                     self._set_state("cooling", now)
+                elif not active:
+                    # Per-process says idle but device says active.
+                    # Likely an invisible content process (Firefox).
+                    # Use periodic tab check as the stop signal.
+                    self._browser_tick += 1
+                    if self._browser_tick >= BROWSER_CHECK_EVERY:
+                        self._browser_tick = 0
+                        if _browser_meeting_name() is None:
+                            log.info("meeting tab gone (content-process fallback)")
+                            self._set_state("cooling", now)
                 elif self._browser_source:
                     # Browsers can keep the mic "warm" after a call ends, so
-                    # re-check the tab every few polls. Native meeting apps
-                    # release the mic reliably on hangup, so they don't need
-                    # this extra poll.
+                    # re-check the tab every few polls.
                     self._browser_tick += 1
                     if self._browser_tick >= BROWSER_CHECK_EVERY:
                         self._browser_tick = 0
@@ -361,22 +377,38 @@ def _identify_meeting() -> tuple[str, str, str | None] | None:
     """Decide whether a recognised meeting is currently in progress.
 
     Returns ``(source, meeting_name, bundle_id)`` where ``source`` is
-    ``"native"`` or ``"browser"``, or ``None`` if no meeting is detected.
+    ``"native"``, ``"browser"`` (tab verified), or ``"browser-unverified"``
+    (browser holds mic but tab check failed), or ``None`` if no meeting is
+    detected.
 
-    * Native: the mic is held by a process whose path matches a known
-      native meeting app bundle (Zoom, FaceTime, Slack, …).  Mic-holder
-      presence is sufficient — native apps only hold the mic during an
-      actual call.
-    * Browser: the mic is held by a browser process AND that browser has
-      a tab/window pointing to a recognised meeting service (Google Meet,
-      Microsoft Teams, Zoom-in-browser, Huddle).  The URL/title gate is
-      essential — without it, WebRTC mic tests or Meet landing pages
-      would trigger false starts.
+    Detection strategy (in order):
+    1. Per-process CoreAudio API — identifies which PID holds the mic.
+    2. Fallback — if mic is active but no PID claims input (e.g. Firefox
+       content processes), check ``ps`` for any running meeting app/browser.
     """
     holder_paths = _mic_holder_paths()
-    if not holder_paths:
-        return None
 
+    if holder_paths:
+        log.debug("mic holders: %s", holder_paths)
+        result = _match_holder_paths(holder_paths)
+        if result:
+            return result
+
+    # Fallback: mic is in use (caller verified) but the per-process API
+    # can't see the holder (Firefox content processes, sandboxed helpers,
+    # etc.).  Check if any known meeting app or browser is running.
+    if not holder_paths:
+        result = _match_running_processes()
+        if result:
+            return result
+
+    return None
+
+
+def _match_holder_paths(
+    holder_paths: list[str],
+) -> tuple[str, str, str | None] | None:
+    """Match mic-holder executable paths against known apps/browsers."""
     # 1. Native meeting apps — path match is enough.
     for path in holder_paths:
         p = path.lower()
@@ -384,19 +416,61 @@ def _identify_meeting() -> tuple[str, str, str | None] | None:
             if frag.lower() in p:
                 return "native", name, bundle_id
 
-    # 2. Browser meetings — path match + URL / title check.
-    is_browser = any(
-        frag.lower() in path.lower()
-        for path in holder_paths
-        for frag in _BROWSER_BUNDLES
-    )
-    if is_browser:
-        result = _browser_meeting_name()
-        if result:
-            name, bundle_id = result
-            return "browser", name, bundle_id
+    # 2. Browser meetings — mic hold is enough to start; tab check is
+    #    best-effort for naming and stop-detection.
+    browser_bundle_id: str | None = None
+    for path in holder_paths:
+        p = path.lower()
+        for frag, bundle_id in zip(_BROWSER_BUNDLES, _BROWSER_BUNDLE_IDS):
+            if frag.lower() in p:
+                browser_bundle_id = bundle_id
+                break
+        if browser_bundle_id:
+            break
 
+    if browser_bundle_id:
+        return _resolve_browser_meeting(browser_bundle_id)
     return None
+
+
+def _match_running_processes() -> tuple[str, str, str | None] | None:
+    """Fallback: check browser tab titles when per-process CoreAudio can't
+    see the mic holder (e.g. Firefox content processes).
+
+    Only triggers when a browser actually has a recognised meeting tab —
+    a running browser alone is NOT sufficient (too many false positives).
+    """
+    result = _browser_meeting_name()
+    if result:
+        name, bundle_id = result
+        log.info("fallback: browser meeting tab detected: %s", name)
+        return "browser", name, bundle_id
+    return None
+
+
+def _resolve_browser_meeting(
+    bundle_id: str,
+) -> tuple[str, str, str | None]:
+    """Given a browser bundle ID, try the tab check for naming, else fallback."""
+    result = _browser_meeting_name()
+    if result:
+        name, _ = result
+        log.info("browser meeting tab detected: %s", name)
+        return "browser", name, bundle_id
+    log.info("browser holding mic but tab check failed; starting anyway")
+    return "browser-unverified", _calendar_meeting_name(), bundle_id
+
+
+def _calendar_meeting_name() -> str:
+    """Best-effort meeting name from the macOS calendar, or a timestamp."""
+    try:
+        from trnscrb.calendar_integration import get_current_or_upcoming_event
+        evt = get_current_or_upcoming_event()
+        if evt and evt.get("title"):
+            return evt["title"]
+    except Exception:
+        pass
+    return f"meeting-{datetime.now().strftime('%H%M')}"
 
 
 def detect_meeting() -> tuple[str, str | None]:
@@ -411,16 +485,7 @@ def detect_meeting() -> tuple[str, str | None]:
     if meeting is not None:
         _, name, bundle_id = meeting
         return name, bundle_id
-
-    # Fallbacks — only used when nothing is actively holding the mic.
-    try:
-        from trnscrb.calendar_integration import get_current_or_upcoming_event
-        evt = get_current_or_upcoming_event()
-        if evt and evt.get("title"):
-            return evt["title"], None
-    except Exception:
-        pass
-    return f"meeting-{datetime.now().strftime('%H%M')}", None
+    return _calendar_meeting_name(), None
 
 
 # AppleScript fragments to read the active tab/window title of each browser.
@@ -477,7 +542,7 @@ end tell
 tell application "Firefox"
     repeat with w in windows
         set t to name of w
-        if t starts with "Meet " then
+        if t is "Meet" or t starts with "Meet -" or t starts with "Meet —" then
             if t does not contain "ended" then return "Google Meet"
         end if
         if t contains "Microsoft Teams" then return "Microsoft Teams"
