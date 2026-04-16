@@ -4,7 +4,9 @@ States:
   idle        — mic icon, Start enabled, Stop disabled
   watching    — mic icon (auto-record on, listening)
   recording   — red icon, Start disabled, Stop enabled
-  transcribing— red icon, Start disabled, Stop shows "Transcribing…" (disabled)
+
+Transcription runs in background threads and does not block new recordings.
+The menu shows "Transcribing N meeting(s)…" while jobs are pending.
 """
 import logging
 import os
@@ -66,6 +68,8 @@ class TrnscrbApp(rumps.App):
         self._recorder:   rec_module.Recorder | None = None
         self._started_at: datetime | None = None
         self._watcher:    MicWatcher | None = None
+        self._bg_jobs:    int = 0   # number of background transcription jobs
+        self._bg_lock     = threading.Lock()
 
         self._set_state("idle")
 
@@ -167,19 +171,29 @@ class TrnscrbApp(rumps.App):
         started_at     = self._started_at or datetime.now()
         recorder       = self._recorder
         self._recorder = None
-        self._set_state("transcribing")
 
-        threading.Thread(
-            target=self._process, args=(recorder, started_at), daemon=True
-        ).start()
+        # Stop capture synchronously so the mic/SCK are released before
+        # a new recording can start.  Only transcription runs in background.
+        audio_path = recorder.stop()
+
+        with self._bg_lock:
+            self._bg_jobs += 1
+        self._restore_idle()
+
+        try:
+            threading.Thread(
+                target=self._process, args=(audio_path, started_at), daemon=True
+            ).start()
+        except Exception:
+            with self._bg_lock:
+                self._bg_jobs = max(0, self._bg_jobs - 1)
+            self._update_bg_menu()
 
     # ── auto-record callbacks ─────────────────────────────────────────────────
 
     def _auto_start(self, meeting_name: str, bundle_id: str | None = None):
-        if getattr(self, "_current_state", "idle") == "recording":
+        if self._recorder and self._recorder.is_recording:
             return
-        # Allow starting a new recording while previous is still transcribing
-        # (transcription runs in a background thread, doesn't need the recorder)
         self._do_start(meeting_name=meeting_name, bundle_id=bundle_id)
 
     def _auto_stop(self):
@@ -203,11 +217,17 @@ class TrnscrbApp(rumps.App):
 
     # ── background transcription ──────────────────────────────────────────────
 
-    def _process(self, recorder: rec_module.Recorder, started_at: datetime):
-        audio_path = recorder.stop()
+    def _process(self, audio_path: Path | None, started_at: datetime):
+        try:
+            self._process_inner(audio_path, started_at)
+        finally:
+            with self._bg_lock:
+                self._bg_jobs = max(0, self._bg_jobs - 1)
+            self._update_bg_menu()
+
+    def _process_inner(self, audio_path: Path | None, started_at: datetime):
         if not audio_path:
             log.warning("No audio captured")
-            self._restore_idle()
             rumps.notification("Trnscrb", "Error", "No audio captured.")
             return
 
@@ -221,7 +241,6 @@ class TrnscrbApp(rumps.App):
         except Exception as e:
             log.error("Transcription failed: %s", e, exc_info=True)
             audio_path.unlink(missing_ok=True)
-            self._restore_idle()
             rumps.notification("Trnscrb", "Transcription failed", str(e))
             return
 
@@ -241,7 +260,6 @@ class TrnscrbApp(rumps.App):
         storage.save_transcript(path, text)
         log.info("Transcript saved: %s", path)
 
-        self._restore_idle()
         rumps.notification("Trnscrb", f"Saved: {meeting_name}", f"~/meeting-notes/{path.name}")
 
         if get_setting("auto_enrich"):
@@ -265,14 +283,28 @@ class TrnscrbApp(rumps.App):
             _integrate_notes(path)
 
     def _restore_idle(self):
-        """Called from background thread when transcription finishes."""
+        """Return to idle/watching — recording can start immediately."""
         state = "watching" if (self._watcher and self._watcher.is_watching) else "idle"
         self._set_state(state)
+        self._update_bg_menu()
+
+    def _update_bg_menu(self):
+        """Update the stop item to show background job count when not recording."""
+        with self._bg_lock:
+            n = self._bg_jobs
+        if self._current_state not in ("idle", "watching"):
+            return
+        if n > 0:
+            self._stop_item.title = f"Transcribing {n} meeting{'s' if n > 1 else ''}…"
+            self._stop_item.set_callback(None)
+        else:
+            self._stop_item.title = "Stop Transcribing"
+            self._stop_item.set_callback(None)
 
     # ── state / icon management ───────────────────────────────────────────────
 
     def _set_state(self, state: str):
-        """state: idle | watching | recording | transcribing"""
+        """state: idle | watching | recording"""
         self._current_state = state
         if state in ("idle", "watching"):
             self._start_item.set_callback(self.start_recording)
@@ -282,17 +314,13 @@ class TrnscrbApp(rumps.App):
             self._start_item.set_callback(None)
             self._stop_item.title = "Stop Transcribing"
             self._stop_item.set_callback(self.stop_recording)
-        elif state == "transcribing":
-            self._start_item.set_callback(None)
-            self._stop_item.title = "Transcribing…"
-            self._stop_item.set_callback(None)
 
         self._set_icon_state(state)
 
     def _set_icon_state(self, state: str):
         rec_icon  = icon_path(recording=True)
         idle_icon = icon_path(recording=False)
-        if state in ("recording", "transcribing"):
+        if state == "recording":
             self.icon, self.title = (rec_icon, None) if rec_icon else (None, _EMOJI_RECORDING)
         else:
             self.icon, self.title = (idle_icon, None) if idle_icon else (None, _EMOJI_IDLE)
