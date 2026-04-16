@@ -29,6 +29,18 @@ _EMOJI_IDLE      = "🎙"
 _EMOJI_RECORDING = "🔴"
 
 
+def _notify(title: str, subtitle: str, message: str = "") -> None:
+    """Send a macOS notification via osascript (rumps uses deprecated NSUserNotification)."""
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    if message:
+        script = f'display notification "{_esc(message)}" with title "{_esc(title)}" subtitle "{_esc(subtitle)}"'
+    else:
+        script = f'display notification "{_esc(subtitle)}" with title "{_esc(title)}"'
+    subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class TrnscrbApp(rumps.App):
     def __init__(self):
         try:
@@ -111,23 +123,23 @@ class TrnscrbApp(rumps.App):
             put_setting("auto_record", False)
             if not (self._recorder and self._recorder.is_recording):
                 self._set_icon_state("idle")
-            rumps.notification("Trnscrb", "Auto-transcribe off", "")
+            _notify("Trnscrb", "Auto-transcribe off", "")
         else:
             self._start_watcher()
             sender.title = "Auto-transcribe: On ✓"
             put_setting("auto_record", True)
-            rumps.notification("Trnscrb", "Auto-transcribe on",
+            _notify("Trnscrb", "Auto-transcribe on",
                                "Will start when mic is active for 5+ seconds")
 
     def toggle_auto_enrich(self, sender):
         if get_setting("auto_enrich"):
             sender.title = "Auto-enrich: Off"
             put_setting("auto_enrich", False)
-            rumps.notification("Trnscrb", "Auto-enrich off", "")
+            _notify("Trnscrb", "Auto-enrich off", "")
         else:
             sender.title = "Auto-enrich: On ✓"
             put_setting("auto_enrich", True)
-            rumps.notification("Trnscrb", "Auto-enrich on",
+            _notify("Trnscrb", "Auto-enrich on",
                                "Transcripts will be enriched with summary and action items")
 
     def toggle_auto_integrate(self, sender):
@@ -165,7 +177,7 @@ class TrnscrbApp(rumps.App):
 
         source = self._recorder.audio_source_description
         label  = f" — {meeting_name}" if meeting_name else ""
-        rumps.notification("Trnscrb", f"Transcription started{label}", f"via {source}")
+        _notify("Trnscrb", f"Transcription started{label}", f"via {source}")
 
     def _do_stop(self):
         started_at     = self._started_at or datetime.now()
@@ -228,7 +240,7 @@ class TrnscrbApp(rumps.App):
     def _process_inner(self, audio_path: Path | None, started_at: datetime):
         if not audio_path:
             log.warning("No audio captured")
-            rumps.notification("Trnscrb", "Error", "No audio captured.")
+            _notify("Trnscrb", "Error", "No audio captured.")
             return
 
         evt          = get_current_or_upcoming_event()
@@ -241,7 +253,7 @@ class TrnscrbApp(rumps.App):
         except Exception as e:
             log.error("Transcription failed: %s", e, exc_info=True)
             audio_path.unlink(missing_ok=True)
-            rumps.notification("Trnscrb", "Transcription failed", str(e))
+            _notify("Trnscrb", "Transcription failed", str(e))
             return
 
         hf_token = _read_hf_token()
@@ -260,7 +272,7 @@ class TrnscrbApp(rumps.App):
         storage.save_transcript(path, text)
         log.info("Transcript saved: %s", path)
 
-        rumps.notification("Trnscrb", f"Saved: {meeting_name}", f"~/meeting-notes/{path.name}")
+        _notify("Trnscrb", f"Saved: {meeting_name}", f"~/meeting-notes/{path.name}")
 
         if get_setting("auto_enrich"):
             log.info("Starting enrichment for %s", path.name)
@@ -274,10 +286,10 @@ class TrnscrbApp(rumps.App):
                 )
                 storage.save_transcript(path, updated)
                 log.info("Enrichment complete: %s", path.name)
-                rumps.notification("Trnscrb", "Enrichment complete", path.name)
+                _notify("Trnscrb", "Enrichment complete", path.name)
             except Exception as e:
                 log.error("Enrichment failed: %s", e, exc_info=True)
-                rumps.notification("Trnscrb", "Enrichment failed", str(e))
+                _notify("Trnscrb", "Enrichment failed", str(e))
 
         if get_setting("auto_integrate"):
             _integrate_notes(path)
