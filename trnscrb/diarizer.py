@@ -4,29 +4,37 @@ Requires a HuggingFace token with access to:
   pyannote/speaker-diarization-3.1
 (accept the model's conditions at hf.co once, then it works offline).
 """
+import threading
 from pathlib import Path
+
+_diarize_lock = threading.Lock()
 
 
 def diarize(audio_path: Path, hf_token: str) -> list[dict]:
-    """Return [{start, end, speaker}] segments."""
+    """Return [{start, end, speaker}] segments.
+
+    Serialized with a lock to prevent concurrent MPS/GPU usage when
+    multiple transcription jobs run in parallel.
+    """
     from pyannote.audio import Pipeline
     import torch
 
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token,
-    )
+    with _diarize_lock:
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=hf_token,
+        )
 
-    # Prefer Apple Silicon Metal, fallback to CPU
-    if torch.backends.mps.is_available():
-        pipeline = pipeline.to(torch.device("mps"))
+        # Prefer Apple Silicon Metal, fallback to CPU
+        if torch.backends.mps.is_available():
+            pipeline = pipeline.to(torch.device("mps"))
 
-    diarization = pipeline(str(audio_path))
+        diarization = pipeline(str(audio_path))
 
-    return [
-        {"start": turn.start, "end": turn.end, "speaker": speaker}
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
-    ]
+        return [
+            {"start": turn.start, "end": turn.end, "speaker": speaker}
+            for turn, _, speaker in diarization.itertracks(yield_label=True)
+        ]
 
 
 def merge(transcript: list[dict], diarization: list[dict]) -> list[dict]:

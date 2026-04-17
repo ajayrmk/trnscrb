@@ -8,6 +8,7 @@ from pathlib import Path
 
 _model = None
 _model_lock = threading.Lock()
+_transcribe_lock = threading.Lock()
 _model_size = "small"
 
 
@@ -27,21 +28,25 @@ def _get_model():
 
 
 def transcribe(audio_path: Path) -> list[dict]:
-    """Return segments: [{start, end, text, speaker}] — speaker filled later by diarizer."""
+    """Return segments: [{start, end, text, speaker}] — speaker filled later by diarizer.
+
+    Serialized with a lock so concurrent calls don't overlap on the GPU.
+    """
     model = _get_model()
-    segments, _info = model.transcribe(
-        str(audio_path),
-        beam_size=5,
-        vad_filter=True,   # skip silent gaps automatically
-        language=None,     # auto-detect
-    )
-    return [
-        {
-            "start": seg.start,
-            "end": seg.end,
-            "text": seg.text.strip(),
-            "speaker": None,
-        }
-        for seg in segments
-        if seg.text.strip()
-    ]
+    with _transcribe_lock:
+        segments, _info = model.transcribe(
+            str(audio_path),
+            beam_size=5,
+            vad_filter=True,   # skip silent gaps automatically
+            language=None,     # auto-detect
+        )
+        return [
+            {
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text.strip(),
+                "speaker": None,
+            }
+            for seg in segments
+            if seg.text.strip()
+        ]

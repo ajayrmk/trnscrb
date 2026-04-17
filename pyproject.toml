@@ -47,3 +47,6 @@ trnscrb = "trnscrb.cli:cli"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["trnscrb*"]
+
+[tool.setuptools.package-data]
+trnscrb = ["sck-capture/Package.swift", "sck-capture/Sources/main.swift"]

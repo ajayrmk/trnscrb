@@ -5,7 +5,10 @@ Sends the raw transcript to Claude and gets back:
   - Action items
   - Inferred speaker names (replaces SPEAKER_00 etc.)
 """
+import logging
 from typing import Optional
+
+log = logging.getLogger("trnscrb")
 
 
 _PROMPT_TEMPLATE = """You are analyzing a meeting transcript.{context}
@@ -53,14 +56,18 @@ def enrich_transcript(
     prompt = _PROMPT_TEMPLATE.format(context=context, transcript=transcript_text)
 
     client = Anthropic()
+    log.info("Calling Claude API (%s) for enrichment", model)
     response = client.messages.create(
         model=model,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
     enrichment = response.content[0].text
+    log.info("Claude API response received (%d chars)", len(enrichment))
 
     speaker_map = _parse_speaker_map(enrichment)
+    if speaker_map:
+        log.info("Speaker map: %s", speaker_map)
     enriched = _apply_speaker_map(transcript_text, speaker_map)
 
     return {
