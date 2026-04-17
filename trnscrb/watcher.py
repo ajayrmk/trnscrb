@@ -170,78 +170,92 @@ class MicWatcher:
 
     def _loop(self) -> None:
         while self._running:
-            # While recording/cooling, exclude trnscrb's own mic capture so
-            # the idle signal can fire when the meeting app releases the mic.
-            if self._state in ("recording", "cooling"):
-                active = _is_mic_active_externally()
-            else:
-                active = is_mic_in_use()
-
-            now     = datetime.now()
-            elapsed = (now - self._since).total_seconds() if self._since else 0
-
-            if self._state == "idle":
-                if active:
-                    self._set_state("warming", now)
-
-            elif self._state == "warming":
-                if not active:
-                    # False positive — Siri, dictation, a brief mic check
-                    self._set_state("idle", None)
-                elif elapsed >= WARMUP_SECS:
-                    meeting = _identify_meeting()
-                    if meeting is not None:
-                        source, name, bundle_id = meeting
-                        log.info("meeting detected: %s (%s)", name, source)
-                        self._rec_started    = now
-                        # Only use tab-gone detection when tab was verified
-                        self._browser_source = (source == "browser")
-                        self._browser_tick   = 0
-                        self._set_state("recording", now)
-                        self.on_start(name, bundle_id)
-                    # else: stay in warming — no recognised meeting yet.
-
-            elif self._state == "recording":
-                if not active and not is_mic_in_use():
-                    # Both per-process AND device-level confirm mic idle.
-                    self._set_state("cooling", now)
-                elif not active:
-                    # Per-process says idle but device says active.
-                    # Likely an invisible content process (Firefox).
-                    # Use periodic tab check as the stop signal.
-                    self._browser_tick += 1
-                    if self._browser_tick >= BROWSER_CHECK_EVERY:
-                        self._browser_tick = 0
-                        if _browser_meeting_name() is None:
-                            log.info("meeting tab gone (content-process fallback)")
-                            self._set_state("cooling", now)
-                elif self._browser_source:
-                    # Browsers can keep the mic "warm" after a call ends, so
-                    # re-check the tab every few polls.
-                    self._browser_tick += 1
-                    if self._browser_tick >= BROWSER_CHECK_EVERY:
-                        self._browser_tick = 0
-                        if _browser_meeting_name() is None:
-                            log.info("browser meeting tab gone")
-                            self._set_state("cooling", now)
-
-            elif self._state == "cooling":
-                if active and not (
-                    # Don't rejoin a browser recording if the meeting tab is
-                    # already gone — otherwise Chrome keeping the mic warm
-                    # would flip-flop us between cooling and recording until
-                    # the heat death of the universe.
-                    self._browser_source and _browser_meeting_name() is None
-                ):
-                    self._browser_tick = 0
-                    self._set_state("recording", now)
-                elif elapsed >= GRACE_SECS:
-                    self._rec_started    = None
-                    self._browser_source = False
-                    self._set_state("idle", None)
-                    self.on_stop()
-
+            try:
+                self._tick()
+            except Exception:
+                log.exception("watcher tick failed; continuing")
             time.sleep(POLL_SECS)
+
+    def _tick(self) -> None:
+        # While recording/cooling, exclude trnscrb's own mic capture so
+        # the idle signal can fire when the meeting app releases the mic.
+        if self._state in ("recording", "cooling"):
+            active = _is_mic_active_externally()
+        else:
+            active = is_mic_in_use()
+
+        now     = datetime.now()
+        elapsed = (now - self._since).total_seconds() if self._since else 0
+
+        if self._state == "idle":
+            if active:
+                self._set_state("warming", now)
+
+        elif self._state == "warming":
+            if not active:
+                # False positive — Siri, dictation, a brief mic check
+                self._set_state("idle", None)
+            elif elapsed >= WARMUP_SECS:
+                meeting = _identify_meeting()
+                if meeting is not None:
+                    source, name, bundle_id = meeting
+                    log.info("meeting detected: %s (%s)", name, source)
+                    self._rec_started    = now
+                    # Only use tab-gone detection when tab was verified
+                    self._browser_source = (source == "browser")
+                    self._browser_tick   = 0
+                    self._set_state("recording", now)
+                    try:
+                        self.on_start(name, bundle_id)
+                    except Exception:
+                        log.exception("on_start callback failed; returning to idle")
+                        self._rec_started    = None
+                        self._browser_source = False
+                        self._set_state("idle", None)
+                # else: stay in warming — no recognised meeting yet.
+
+        elif self._state == "recording":
+            if not active and not is_mic_in_use():
+                # Both per-process AND device-level confirm mic idle.
+                self._set_state("cooling", now)
+            elif not active:
+                # Per-process says idle but device says active.
+                # Likely an invisible content process (Firefox).
+                # Use periodic tab check as the stop signal.
+                self._browser_tick += 1
+                if self._browser_tick >= BROWSER_CHECK_EVERY:
+                    self._browser_tick = 0
+                    if _browser_meeting_name() is None:
+                        log.info("meeting tab gone (content-process fallback)")
+                        self._set_state("cooling", now)
+            elif self._browser_source:
+                # Browsers can keep the mic "warm" after a call ends, so
+                # re-check the tab every few polls.
+                self._browser_tick += 1
+                if self._browser_tick >= BROWSER_CHECK_EVERY:
+                    self._browser_tick = 0
+                    if _browser_meeting_name() is None:
+                        log.info("browser meeting tab gone")
+                        self._set_state("cooling", now)
+
+        elif self._state == "cooling":
+            if active and not (
+                # Don't rejoin a browser recording if the meeting tab is
+                # already gone — otherwise Chrome keeping the mic warm
+                # would flip-flop us between cooling and recording until
+                # the heat death of the universe.
+                self._browser_source and _browser_meeting_name() is None
+            ):
+                self._browser_tick = 0
+                self._set_state("recording", now)
+            elif elapsed >= GRACE_SECS:
+                self._rec_started    = None
+                self._browser_source = False
+                self._set_state("idle", None)
+                try:
+                    self.on_stop()
+                except Exception:
+                    log.exception("on_stop callback failed; watcher continues")
 
     def _set_state(self, new_state: str, since: datetime | None) -> None:
         if new_state != self._state:
